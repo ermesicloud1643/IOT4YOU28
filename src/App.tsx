@@ -21,9 +21,8 @@ import {
   Star,
   Home,
 } from "lucide-react";
-import { useStreamingText } from "./hooks/useStreamingText";
-import { StreamingTextDisplay } from "./components/StreamingTextDisplay";
-import { streamGeminiResponse } from "./utils/geminiStreaming";
+import { ProgressDisplay } from "./components/ProgressDisplay";
+import { generateWithProgress } from "./utils/geminiStreaming";
 
 // --- Types ---
 interface Component {
@@ -1744,7 +1743,7 @@ const ScriptCircuitPage = () => {
   const [generatedSVG, setGeneratedSVG] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const { streamedText: streamedSVG, isStreaming: isStreamingSVG, streamText: streamSVG, clearText: clearSVG, appendText: appendSVG, startStreaming: startStreamingSVG, stopStreaming: stopStreamingSVG } = useStreamingText();
+  const [svgProgress, setSvgProgress] = useState(0);
 
   // Function to copy the AI system prompt to clipboard
   const copySystemPrompt = () => {
@@ -2014,11 +2013,9 @@ ${projectDescription}`;
     setIsLoading(true);
     setGeneratedSVG("");
     setError("");
-    startStreamingSVG();
+    setSvgProgress(0);
 
     try {
-      // This entire block is a STRING sent to the AI. The code examples within it are NOT executed by JavaScript.
-      // Linters may show false errors here. You can ignore them or add a linter ignore comment if needed.
       const systemPrompt = `
 # Professional SVG Circuit Diagram Generator
 **MISSION**: Create PROFESSIONAL, ACCURATE SVG circuit diagrams that are so clear that anyone can understand the connections at a glance.
@@ -2261,17 +2258,14 @@ ESP32 DevKit V1:
 **NO EXTRA TEXT - JUST THE SVG file
 ${projectDescription}`;
 
-      let fullResponse = '';
-
-      await streamGeminiResponse(
+      await generateWithProgress(
         "AIzaSyAg9vO1uRjzQxuIdVJcW-13-GL8AKVhl6I",
         systemPrompt,
-        (chunk) => {
-          fullResponse += chunk;
-          appendSVG(chunk);
+        (percentage) => {
+          setSvgProgress(percentage);
         },
-        () => {
-          const aiResponse = fullResponse.trim();
+        (fullText) => {
+          const aiResponse = fullText.trim();
 
           let svgContent = "";
           const svgMatch = aiResponse.match(/```svg\s*([\s\S]*?)\s*```/);
@@ -2283,28 +2277,28 @@ ${projectDescription}`;
               svgContent = svgTagMatch[0];
             } else {
               setError("L'IA n'a pas généré de code SVG valide. Voici sa réponse complète : " + aiResponse);
-              stopStreamingSVG();
               setIsLoading(false);
+              setSvgProgress(0);
               return;
             }
           }
 
           setGeneratedSVG(svgContent);
-          stopStreamingSVG();
           setIsLoading(false);
+          setSvgProgress(100);
         },
         (error) => {
           console.error("Erreur API Gemini:", error);
           setError("❌ Échec de la connexion à l'IA. Vérifiez le réseau ou l'API key.");
-          stopStreamingSVG();
           setIsLoading(false);
+          setSvgProgress(0);
         }
       );
     } catch (error) {
       console.error("Erreur API Gemini:", error);
       setError("❌ Échec de la connexion à l'IA. Vérifiez le réseau ou l'API key.");
-      stopStreamingSVG();
       setIsLoading(false);
+      setSvgProgress(0);
     }
   };
 
@@ -2425,7 +2419,13 @@ ${projectDescription}`;
           )}
         </div>
 
-        {(generatedSVG || isStreamingSVG) && (
+        {isLoading && (
+          <div className="glass-card rounded-3xl p-8 flex justify-center">
+            <ProgressDisplay percentage={svgProgress} />
+          </div>
+        )}
+
+        {generatedSVG && !isLoading && (
           <div className="glass-card rounded-3xl p-8">
             <h2 className="text-2xl font-bold text-gray-800 mb-4">Schéma du Circuit Généré</h2>
             <div className="border border-gray-300 rounded-lg p-4 bg-gray-50 overflow-auto">
@@ -2433,12 +2433,9 @@ ${projectDescription}`;
             </div>
             <div className="mt-6 p-4 bg-blue-50 rounded-lg">
               <h3 className="font-semibold text-gray-800 mb-2">Code SVG (copiez pour l'utiliser dans vos projets)</h3>
-              <StreamingTextDisplay
-                text={streamedSVG}
-                isStreaming={isStreamingSVG}
-                className="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto text-sm leading-relaxed whitespace-pre-wrap font-mono max-h-96 overflow-y-auto"
-                autoScroll={true}
-              />
+              <div className="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto text-sm leading-relaxed whitespace-pre-wrap font-mono max-h-96 overflow-y-auto">
+                {generatedSVG}
+              </div>
             </div>
           </div>
         )}
@@ -2484,7 +2481,7 @@ function App() {
   const [selectedComponent, setSelectedComponent] = useState<Component | null>(null);
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
   const [loadingCode, setLoadingCode] = useState(false);
-  const { streamedText: streamedCode, isStreaming: isStreamingCode, streamText: streamCode, clearText: clearCode, appendText: appendCode, startStreaming: startStreamingCode, stopStreaming: stopStreamingCode } = useStreamingText();
+  const [codeProgress, setCodeProgress] = useState(0);
 
   // --- API Constants defined inside App ---
   // ⚠️ WARNING: The API Key is exposed in this client-side code.
@@ -2494,12 +2491,10 @@ function App() {
 
   // 🔥 Gemini API Call to Generate Arduino Code
   const generateCode = async (component: Component) => {
-    // 1. Set initial states
     setLoadingCode(true);
     setGeneratedCode(null);
-    startStreamingCode();
+    setCodeProgress(0);
 
-    // 2. Construct the detailed prompt in French
     const systemPrompt = `
 Génère une explication simple et détaillée du fonctionnement du composant suivant :
 ${component.name} (${component.description}).
@@ -2508,27 +2503,23 @@ Ensuite, propose un petit code d'exemple en Arduino C++ montrant comment utilise
 Le code doit être minimaliste, clair et pédagogique, avec des commentaires en français expliquant chaque étape (initialisation, configuration, boucle, etc.).
 `;
 
-    let fullResponse = '';
-
-    await streamGeminiResponse(
+    await generateWithProgress(
       API_KEY,
       systemPrompt,
-      (chunk) => {
-        fullResponse += chunk;
-        appendCode(chunk);
+      (percentage) => {
+        setCodeProgress(percentage);
       },
-      () => {
-        setGeneratedCode(fullResponse);
-        stopStreamingCode();
+      (fullText) => {
+        setGeneratedCode(fullText);
         setLoadingCode(false);
+        setCodeProgress(100);
       },
       (error) => {
         console.error("Erreur API Gemini:", error);
         const errorMessage = `❌ Échec de la connexion ou erreur API. Détails: ${error.message}`;
         setGeneratedCode(errorMessage);
-        appendCode(errorMessage);
-        stopStreamingCode();
         setLoadingCode(false);
+        setCodeProgress(0);
       }
     );
   };
@@ -3173,7 +3164,7 @@ const HomePage = () => {
     const [customPrompt, setCustomPrompt] = useState("");
     const [customGeneratedCode, setCustomGeneratedCode] = useState<string | null>(null);
     const [loadingCustomCode, setLoadingCustomCode] = useState(false);
-    const { streamedText: streamedCustomCode, isStreaming: isStreamingCustomCode, streamText: streamCustomCode, clearText: clearCustomCode, appendText: appendCustomCode, startStreaming: startStreamingCustomCode, stopStreaming: stopStreamingCustomCode } = useStreamingText();
+    const [customCodeProgress, setCustomCodeProgress] = useState(0);
     // >>> NEW FEATURE: Applied Search Term (for Enter key)
     const [appliedSearchTerm, setAppliedSearchTerm] = useState("");
     // Handle Enter key press for search
@@ -3210,7 +3201,7 @@ const HomePage = () => {
       }
       setLoadingCustomCode(true);
       setCustomGeneratedCode(null);
-      startStreamingCustomCode();
+      setCustomCodeProgress(0);
 
       const componentList = selectedComponentsForAI.map(comp => `${comp.name} (${comp.description})`).join("\n- ");
       const fullPrompt = `L'utilisateur a sélectionné les composants suivants :
@@ -3224,27 +3215,23 @@ Génère une réponse complète, pédagogique et utile. Cela peut être :
 - Des conseils d'utilisation.
 Le tout doit être clair, concis et directement utilisable par un étudiant ou un débutant.`;
 
-      let fullResponse = '';
-
-      await streamGeminiResponse(
+      await generateWithProgress(
         "AIzaSyAg9vO1uRjzQxuIdVJcW-13-GL8AKVhl6I",
         fullPrompt,
-        (chunk) => {
-          fullResponse += chunk;
-          appendCustomCode(chunk);
+        (percentage) => {
+          setCustomCodeProgress(percentage);
         },
-        () => {
-          setCustomGeneratedCode(fullResponse);
-          stopStreamingCustomCode();
+        (fullText) => {
+          setCustomGeneratedCode(fullText);
           setLoadingCustomCode(false);
+          setCustomCodeProgress(100);
         },
         (error) => {
           console.error("Erreur API Gemini (Custom):", error);
           const errorMessage = "❌ Échec de la connexion à l'IA. Vérifiez le réseau ou l'API key.";
           setCustomGeneratedCode(errorMessage);
-          appendCustomCode(errorMessage);
-          stopStreamingCustomCode();
           setLoadingCustomCode(false);
+          setCustomCodeProgress(0);
         }
       );
     };
@@ -3359,30 +3346,31 @@ Le tout doit être clair, concis et directement utilisable par un étudiant ou u
               )}
             </button>
             {/* >>> NEW FEATURE: Display Custom Generated Output */}
-            {(customGeneratedCode || isStreamingCustomCode) && (
+            {loadingCustomCode && (
+              <div className="mt-6">
+                <ProgressDisplay percentage={customCodeProgress} />
+              </div>
+            )}
+            {customGeneratedCode && !loadingCustomCode && (
               <div className="mt-6 p-4 glass rounded-2xl">
                 <div className="flex justify-between items-center mb-2">
                   <h4 className="font-semibold text-gray-800">Résultat de l'IA</h4>
                   <button
                     onClick={() => {
-                      navigator.clipboard.writeText(customGeneratedCode || streamedCustomCode).then(
+                      navigator.clipboard.writeText(customGeneratedCode).then(
                         () => alert("✅ Copié dans le presse-papiers !"),
                         () => alert("❌ Échec de la copie.")
                       );
                     }}
                     className="flex items-center space-x-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1 rounded border"
-                    disabled={isStreamingCustomCode}
                   >
                     <Copy size={14} />
                     <span>Copier</span>
                   </button>
                 </div>
-                <StreamingTextDisplay
-                  text={streamedCustomCode}
-                  isStreaming={isStreamingCustomCode}
-                  className="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto text-sm leading-relaxed whitespace-pre-wrap font-mono"
-                  autoScroll={true}
-                />
+                <div className="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto text-sm leading-relaxed whitespace-pre-wrap font-mono">
+                  {customGeneratedCode}
+                </div>
               </div>
             )}
           </div>
@@ -3489,35 +3477,30 @@ Le tout doit être clair, concis et directement utilisable par un étudiant ou u
                       <span>Générer le code</span>
                     </button>
                     {loadingCode && (
-                      <p className="text-blue-600 mt-2 flex items-center space-x-2">
-                        <Zap className="animate-spin" size={16} />
-                        <span>Génération du code...</span>
-                      </p>
+                      <div className="mt-6">
+                        <ProgressDisplay percentage={codeProgress} />
+                      </div>
                     )}
-                    {(generatedCode || isStreamingCode) && (
+                    {generatedCode && !loadingCode && (
                       <div className="mt-4">
                         <div className="flex justify-between items-center mb-2">
                           <h3 className="font-semibold text-gray-800">Code Généré</h3>
                           <button
                             onClick={() => {
-                              navigator.clipboard.writeText(generatedCode || streamedCode).then(
+                              navigator.clipboard.writeText(generatedCode).then(
                                 () => alert("✅ Code copié dans le presse-papiers !"),
                                 () => alert("❌ Échec de la copie.")
                               );
                             }}
                             className="flex items-center space-x-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1 rounded border"
-                            disabled={isStreamingCode}
                           >
                             <Copy size={14} />
                             <span>Copier</span>
                           </button>
                         </div>
-                        <StreamingTextDisplay
-                          text={streamedCode}
-                          isStreaming={isStreamingCode}
-                          className="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto text-sm leading-relaxed whitespace-pre-wrap font-mono"
-                          autoScroll={true}
-                        />
+                        <div className="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto text-sm leading-relaxed whitespace-pre-wrap font-mono">
+                          {generatedCode}
+                        </div>
                       </div>
                     )}
                   </div>
